@@ -12,13 +12,13 @@ not part of the WSO2 CLI (`ws`) and is not installed by it.
 macOS and Linux:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/wso2/wso2-cli/release/asgardeo-cli/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/wso2/wso2-cli/release/asgardeo-cli/scripts/install.sh | bash
 ```
 
 Windows:
 
 ```powershell
-iwr https://raw.githubusercontent.com/wso2/wso2-cli/release/asgardeo-cli/install.ps1 -useb | iex
+iwr https://raw.githubusercontent.com/wso2/wso2-cli/release/asgardeo-cli/scripts/install.ps1 -useb | iex
 ```
 
 Both install the newest stable `asg-v*` release, verify it against the
