@@ -37,6 +37,58 @@
 #   ASG_RELEASE_BASE_URL   Where releases are downloaded from, and where they
 #   ASG_RELEASE_API_URL    are listed. Overridden by tests.
 
+function Get-AsgVersionKey([string] $Version) {
+    $core, $pre = $Version -split '-', 2
+    $n = $core -split '\.'
+    $key = '{0:D10}.{1:D10}.{2:D10}.' -f [long]$n[0], [long]$n[1], [long]$n[2]
+    if (-not $pre) { return $key + '1' }
+    $parts = foreach ($part in $pre -split '\.') {
+        if ($part -match '^\d+$') { '0' + ('{0:D10}' -f [long]$part) } else { '1' + $part }
+    }
+    return $key + '0' + ($parts -join ',')
+}
+
+# Add-AsgToUserPath appends a directory to the user PATH, unless it is already
+# there, and prints what it did.
+#
+# The value is read and written in the registry directly. The user PATH is
+# normally stored as an expandable string, so an entry like %USERPROFILE%\bin
+# stays a reference. [Environment]::GetEnvironmentVariable hands it back with
+# every variable already expanded, and SetEnvironmentVariable writes a plain
+# string, so going through them would rewrite every such entry as a fixed path
+# and change the value's type for good. Here it is read unexpanded and written
+# back with the type it already had.
+function Add-AsgToUserPath([string] $Directory) {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+    try {
+        $raw = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        $kind = if ($raw) { $key.GetValueKind('Path') } else { [Microsoft.Win32.RegistryValueKind]::ExpandString }
+
+        $wanted = $Directory.TrimEnd('\')
+        foreach ($entry in $raw -split ';') {
+            $expanded = [Environment]::ExpandEnvironmentVariables($entry.Trim()).TrimEnd('\')
+            if ($expanded -and $expanded -ieq $wanted) {
+                return 'already on PATH'
+            }
+        }
+
+        $updated = if ($raw.TrimEnd(';')) { "$($raw.TrimEnd(';'));$Directory" } else { $Directory }
+        $key.SetValue('Path', $updated, $kind)
+    }
+    finally {
+        $key.Close()
+    }
+
+    # A registry write does not tell running programs the environment changed,
+    # so a terminal opened from Explorer afterwards would not see it. Setting
+    # any user variable through .NET broadcasts that change; clearing one that
+    # was never set changes nothing else.
+    [Environment]::SetEnvironmentVariable('ASG_INSTALLER_NOTIFY', $null, 'User')
+
+    $env:Path = "$env:Path;$Directory"
+    return "added $Directory to your user PATH; open a new terminal"
+}
+
 function Install-Asg {
     $ErrorActionPreference = 'Stop'
     # Invoke-WebRequest renders a progress bar that slows Windows PowerShell 5.1
@@ -75,22 +127,24 @@ function Install-Asg {
         }
         $wantPre = $env:ASG_PRERELEASE -eq 'true'
         # What decides a candidate is the Pre-release flag set when publishing,
-        # not a suffix in the tag name. A release ranks above its own
-        # candidates, which is decided by a number rather than by how a
-        # placeholder character collates under Sort-Object's culture-aware
-        # comparison. Every key looks at the version after the asg-v prefix:
-        # the prefix has a hyphen of its own, and testing the whole tag for one
-        # would treat every release as a candidate.
-        $newest = $releases |
-            Where-Object {
+        # not a suffix in the tag name.
+        $candidates = @($releases | Where-Object {
                 -not $_.draft -and ($wantPre -or -not $_.prerelease) -and
                 $_.tag_name -match '^asg-v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$'
-            } |
-            Sort-Object -Descending -Property `
-                @{ Expression = { [version]($_.tag_name.Substring($prefix.Length) -replace '-.*$', '') } },
-                @{ Expression = { if ($_.tag_name.Substring($prefix.Length).Contains('-')) { 0 } else { 1 } } },
-                @{ Expression = { $v = $_.tag_name.Substring($prefix.Length); $i = $v.IndexOf('-'); if ($i -ge 0) { $v.Substring($i + 1) } else { '' } } } |
-            Select-Object -First 1
+            })
+        # Ranked by the precedence rules of semantic versioning, with the same
+        # key install.sh builds: numbers zero-padded, 1 for a release or 0 for a
+        # candidate, then each suffix part as 0 and a padded number or 1 and the
+        # word, joined by a comma. The keys are compared by byte order on
+        # purpose. Sort-Object compares strings by culture, which ranks symbols
+        # before letters and would undo the encoding.
+        $byKey = @{}
+        foreach ($release in $candidates) {
+            $byKey[(Get-AsgVersionKey $release.tag_name.Substring($prefix.Length))] = $release
+        }
+        $keys = [string[]]@($byKey.Keys)
+        [Array]::Sort($keys, [StringComparer]::Ordinal)
+        $newest = if ($keys.Count) { $byKey[$keys[-1]] } else { $null }
         if (-not $newest) {
             throw "No published ${prefix}* release found in $repo. Set ASG_VERSION, or ASG_PRERELEASE=true for a release candidate."
         }
@@ -142,18 +196,11 @@ function Install-Asg {
         Remove-Item -Recurse -Force -Path $work -ErrorAction SilentlyContinue
     }
 
-    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $entries = @($userPath -split ';' | Where-Object { $_ })
-    if ($entries -contains $dir) {
-        $pathNote = 'already on PATH'
-    }
-    elseif ($env:ASG_INSTALL_DIR -or $env:ASG_NO_PROFILE -eq '1') {
+    if ($env:ASG_INSTALL_DIR -or $env:ASG_NO_PROFILE -eq '1') {
         $pathNote = "not on PATH; add $dir to it"
     }
     else {
-        [Environment]::SetEnvironmentVariable('Path', (($entries + $dir) -join ';'), 'User')
-        $env:Path = "$env:Path;$dir"
-        $pathNote = "added $dir to your user PATH; open a new terminal"
+        $pathNote = Add-AsgToUserPath $dir
     }
 
     Write-Host "$tag installed at $target (checksum verified; $pathNote)"

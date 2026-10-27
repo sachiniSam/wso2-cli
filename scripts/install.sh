@@ -133,17 +133,35 @@ resolve_tag() {
 	printf '%s%s\n' "$TAG_PREFIX" "$(printf '%s\n' "$versions" | newest_version)"
 }
 
-# newest_version reads semantic versions on stdin and prints the highest. A
-# release ranks above its own candidates, which is the one rule plain numeric
-# sorting gets wrong, so each version is given a sort key that puts "no
-# suffix" after any suffix.
+# newest_version reads semantic versions on stdin and prints the highest, by
+# the precedence rules of semantic versioning rather than by text: 0.10.0 above
+# 0.9.0, a release above its own candidates, and within a candidate suffix each
+# dot-separated part compared on its own, numbers as numbers (rc.10 above rc.2)
+# and below any word, and a longer suffix above its own prefix (rc.1 above rc).
+#
+# Each version is turned into a key that byte order sorts correctly: numbers
+# zero-padded, then 1 for a release or 0 for a candidate, then each suffix part
+# as 0 and a padded number or 1 and the word, joined by a comma, which sorts
+# below every character a part may contain.
 newest_version() {
 	awk '{
 		core = $0; pre = ""
 		i = index($0, "-")
 		if (i > 0) { core = substr($0, 1, i - 1); pre = substr($0, i + 1) }
 		split(core, n, ".")
-		printf "%010d.%010d.%010d.%s %s\n", n[1], n[2], n[3], (pre == "" ? "~" : pre), $0
+		key = sprintf("%010d.%010d.%010d.", n[1], n[2], n[3])
+		if (pre == "") {
+			key = key "1"
+		} else {
+			key = key "0"
+			count = split(pre, part, ".")
+			for (j = 1; j <= count; j++) {
+				if (j > 1) key = key ","
+				if (part[j] ~ /^[0-9]+$/) key = key "0" sprintf("%010d", part[j])
+				else key = key "1" part[j]
+			}
+		}
+		print key " " $0
 	}' | LC_ALL=C sort | tail -n 1 | awk '{print $2}'
 }
 

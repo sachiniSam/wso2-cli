@@ -21,7 +21,8 @@ Windows:
 iwr https://raw.githubusercontent.com/wso2/wso2-cli/release/asgardeo-cli/scripts/install.ps1 -useb | iex
 ```
 
-Both install the newest stable `asg-v*` release, verify it against the
-`checksums.txt` published beside it, and need no administrator rights. Running
-either again updates an existing install. Each script lists the variables it
-reads at the top, including how to pin a version.
+By default both install the newest stable `asg-v*` release. Set
+`ASG_PRERELEASE=true` to include release candidates. Either way the binary is
+verified against the `checksums.txt` published beside it, and no administrator
+rights are needed. Running either again updates an existing install. Each
+script lists the variables it reads at the top, including how to pin a version.
